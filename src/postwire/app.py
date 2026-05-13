@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import (
 from postwire.consumer import Consumer, ConsumerConfig
 from postwire.event import Event
 from postwire.models import EventDB
-from postwire.repository import RepositoryFactory
+from postwire.repository import EventRepository, RepositoryFactory
 from postwire.retention import RetentionConfig, RetentionRunner
 
 # Frozen dataclass — safe to share across instances.
@@ -112,6 +112,35 @@ class Postwire:
             )
             await repo.publish_event(row, max_attempts=max_attempts)
             return row
+
+    @staticmethod
+    async def publish_in(
+        session: AsyncSession,
+        topic: str,
+        event: Event,
+        *,
+        key: str | None = None,
+        available_at: datetime.datetime | None = None,
+        max_attempts: int = 5,
+        source: str | None = None,
+    ) -> EventDB:
+        """Insert the event + deliveries using the caller's session — no new
+        transaction. The caller commits, so the postwire writes are atomic
+        with whatever business writes share the session (transactional outbox).
+
+        Only valid when postwire's tables live in the same database as the
+        caller's session. Cross-database use will fail at flush.
+        """
+        repo = EventRepository(session)
+        row = await repo.create_event(
+            topic=topic,
+            event=event,
+            key=key,
+            available_at=available_at,
+            source=source,
+        )
+        await repo.publish_event(row, max_attempts=max_attempts)
+        return row
 
     async def ensure_subscriptions(self) -> None:
         async with self._repos.begin() as repo:
